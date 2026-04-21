@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Hodgkin-Huxley Simulator</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+body { margin:0; font-family:Arial; background:#f0f2f5; }
+.container { display:grid; grid-template-columns:320px 1fr; height:100vh; }
+.panel { background:#fff; padding:16px; overflow-y:auto; border-right:1px solid #ddd; }
+h2 { margin-top:0; }
+.group { margin-bottom:14px; }
+label { display:block; font-size:13px; margin-bottom:4px; }
+input { width:100%; padding:6px; margin-bottom:6px; }
+button { width:100%; padding:10px; margin-top:8px; border:none; border-radius:6px; cursor:pointer; font-weight:bold; }
+.run { background:#007bff; color:white; }
+.reset { background:#6c757d; color:white; }
+.clear { background:#dc3545; color:white; }
+.checkbox-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+  width: 100%;
+}
+
+.checkbox-grid label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.checkbox-group input {
+  margin: 0;
+  width: auto;
+}
+
+.checkbox-group label {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+}
+
+.checkbox-group input {
+  margin: 0;
+  width: auto;
+}
+.controls-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+#plot { height:100%; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="panel">
+    <h2>HH Simulator</h2>
+
+    <div class="controls-grid">
+      <div class="group">
+        <label>I (µA/cm²)</label>
+        <input type="number" id="I" value="15">
+      </div>
+
+      <div class="group">
+        <label>C</label>
+        <input type="number" id="C" value="1">
+      </div>
+
+      <div class="group">
+        <label>gNa</label>
+        <input type="number" id="gNa" value="120">
+        <label>ENa</label>
+        <input type="number" id="ENa" value="115">
+      </div>
+
+      <div class="group">
+        <label>gK</label>
+        <input type="number" id="gK" value="36">
+        <label>EK</label>
+        <input type="number" id="EK" value="-12">
+      </div>
+
+      <div class="group">
+        <label>gL</label>
+        <input type="number" id="gL" value="0.3">
+        <label>EL</label>
+        <input type="number" id="EL" value="10.6">
+      </div>
+
+      <div class="group">
+        <label>Time (ms)</label>
+        <input type="number" id="T" value="50">
+        <label>dt</label>
+        <input type="number" id="dt" value="0.01" step="0.01">
+      </div>
+    </div>
+
+    <div class="group checkbox-group">
+      <strong>Show Panels</strong>
+      <div class="checkbox-grid">
+        <label><input type="checkbox" checked onchange="togglePanel(0,this.checked)"> Voltage</label>
+        <label><input type="checkbox" checked onchange="togglePanel(1,this.checked)"> m^3</label>
+        <label><input type="checkbox" checked onchange="togglePanel(2,this.checked)"> h</label>
+        <label><input type="checkbox" checked onchange="togglePanel(3,this.checked)"> m^3h</label>
+        <label><input type="checkbox" checked onchange="togglePanel(4,this.checked)"> n^4</label>
+        <label><input type="checkbox" checked onchange="togglePanel(5,this.checked)"> I_Na</label>
+        <label><input type="checkbox" checked onchange="togglePanel(6,this.checked)"> I_K</label>
+        <label><input type="checkbox" checked onchange="togglePanel(7,this.checked)"> I_L</label>
+      </div>
+    </div>
+
+    <button class="run" onclick="runSimulation()">Run Simulation</button>
+    <button class="reset" onclick="resetDefaults()">Reset Params</button>
+    <button class="clear" onclick="clearPlots()">Clear Plots</button>
+  </div>
+
+  <div id="plot"></div>
+</div>
+
+<script>
+
+let allTraces = [];
+let runCount = 0;
+let visiblePanels = [true,true,true,true,true,true,true,true];
+
+const colors = ['#000000','#1f77b4','#d62728','#2ca02c','#9467bd'];
+const labels = ['V (mV)','m^3','h','m^3h','n^4','I_Na','I_K','I_L'];
+
+function getParams() {
+  return {
+    I: +I.value, gNa:+gNa.value, ENa:+ENa.value,
+    gK:+gK.value, EK:+EK.value,
+    gL:+gL.value, EL:+EL.value,
+    C:+C.value, T:+T.value, dt:+dt.value
+  };
+}
+
+function runSimulation() {
+  const p = getParams();
+  runCount++;
+  const color = colors[(runCount-1)%colors.length];
+
+  let x=0,m=0,n=0,h=0;
+
+  const time=[], series = Array.from({length:8},()=>[]);
+  const warmup = 50; // ms
+  const totalTime = p.T + warmup;
+  const steps = Math.floor(totalTime/p.dt);
+  const warmupSteps = Math.floor(warmup/p.dt);
+
+  for (let i=0;i<steps;i++){
+    const t=i*p.dt;
+
+    const am=(2.5-0.1*x)/(Math.exp(2.5-0.1*x)-1);
+    const bm=4*Math.exp(-x/18);
+    const an=(0.1-0.01*x)/(Math.exp(1-0.1*x)-1);
+    const bn=0.125*Math.exp(-x/80);
+    const ah=0.07*Math.exp(-x/20);
+    const bh=1/(Math.exp(3-0.1*x)+1);
+
+    const m3=m**3, n4=n**4;
+    const INa=p.gNa*m3*h*(x-p.ENa);
+    const IK=p.gK*n4*(x-p.EK);
+    const IL=p.gL*(x-p.EL);
+
+    const dxdt=(1/p.C)*(-INa-IK-IL+p.I);
+
+    x+=dxdt*p.dt;
+    m+=(am*(1-m)-bm*m)*p.dt;
+    n+=(an*(1-n)-bn*n)*p.dt;
+    h+=(ah*(1-h)-bh*h)*p.dt;
+
+    // only record after warmup
+    if (i >= warmupSteps) {
+      time.push(t - warmup);
+      series[0].push(x);
+    series[1].push(m3);
+    series[2].push(h);
+    series[3].push(m3*h);
+    series[4].push(n4);
+    series[5].push(INa);
+    series[6].push(IK);
+          series[7].push(IL);
+    }
+  }
+
+  series.forEach((s,i)=>{
+    allTraces.push({
+      x:time,y:s,
+      mode:'lines',
+      name:`Run ${runCount} (I=${p.I})`,
+      line:{color,width:2},
+      xaxis:'x'+(i+1), yaxis:'y'+(i+1),
+      visible: visiblePanels[i]
+    });
+  });
+
+  renderPlot();
+}
+
+function renderPlot(){
+  const rows=8;
+
+  const layout={
+    grid:{rows,columns:1,pattern:'independent'},
+    template:'plotly_white',
+    height:1200
+  };
+
+  for(let i=1;i<=rows;i++){
+    layout['xaxis'+i]={matches:'x'+rows, showticklabels:i===rows, title:i===rows?'Time (ms)':''};
+    layout['yaxis'+i]={title:labels[i-1]};
+  }
+
+  Plotly.react('plot',allTraces,layout);
+}
+
+function togglePanel(index,visible){
+  visiblePanels[index]=visible;
+  allTraces.forEach((tr,i)=>{
+    if(i%8===index){ tr.visible=visible; }
+  });
+  renderPlot();
+}
+
+function clearPlots(){
+  allTraces=[]; runCount=0;
+  Plotly.purge('plot');
+}
+
+function resetDefaults(){
+  I.value=15; gNa.value=120; ENa.value=115;
+  gK.value=36; EK.value=-12;
+  gL.value=0.3; EL.value=10.6;
+  C.value=1; T.value=50; dt.value=0.01;
+}
+
+</script>
+
+</body>
+</html>
